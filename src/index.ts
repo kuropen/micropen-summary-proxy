@@ -14,14 +14,15 @@ const Options = z.object({
 
 app.get('/url', async (c) => {
   const { url, userAgent, timeout, contentLengthLimit, contentLengthRequired } = c.req.query()
+  const parsedUrl = z.url().parse(url)
   const summalyOptions = Options.parse({
     userAgent,
-    contentLengthLimit,
-    contentLengthRequired,
-    responseTimeout: timeout,
-    operationTimeout: timeout,
+    contentLengthLimit: parseInt(contentLengthLimit || '10485760'),
+    contentLengthRequired: contentLengthRequired === 'true' ? true : false,
+    responseTimeout: parseInt(timeout || '20000'),
+    operationTimeout: parseInt(timeout || '60000'),
   })
-  const summalyResponse = await summaly(url, summalyOptions)
+  const summalyResponse = await summaly(parsedUrl, summalyOptions)
   return c.json(summalyResponse)
 })
 
