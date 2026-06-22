@@ -10,6 +10,8 @@ const stringToInt = z.codec(z.string().regex(z.regexes.integer), z.int(), {
 })
 
 const Options = z.object({
+  lang: z.string().optional(),
+  followRedirects: z.stringbool().default(true),
   userAgent: z.string().optional(),
   contentLengthLimit: stringToInt.default(10485760),
   contentLengthRequired: z.stringbool().default(false),
@@ -18,9 +20,17 @@ const Options = z.object({
 })
 
 app.get('/url', async (c) => {
-  const { url, userAgent, timeout, contentLengthLimit, contentLengthRequired } = c.req.query()
+  /*
+    プレビュー取得時のタイムアウト(ms) / key:timeout
+    Content-Lengthの最大値(byte) / key:contentLengthLimit
+    Content-Lengthが取得できた場合のみプレビューを生成 / key:contentLengthRequired
+    User-Agent / key:userAgent
+  */
+  const { url, lang, followRedirects, userAgent, timeout, contentLengthLimit, contentLengthRequired } = c.req.query()
   const parsedUrl = z.url().parse(url)
   const summalyOptions = Options.parse({
+    lang,
+    followRedirects,
     userAgent,
     contentLengthLimit,
     contentLengthRequired,
