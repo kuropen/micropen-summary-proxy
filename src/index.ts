@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { summaly, version } from '@misskey-dev/summaly'
 import * as z from 'zod'
+import youtube from './youtube'
 
 const app = new Hono()
 
@@ -28,7 +29,7 @@ app.get('/url', async (c) => {
   */
   const { url, lang, followRedirects, userAgent, timeout, contentLengthLimit, contentLengthRequired } = c.req.query()
   const parsedUrl = z.url().parse(url)
-  const summalyOptions = Options.parse({
+  const summalyOptions = Object.assign(Options.parse({
     lang,
     followRedirects,
     userAgent,
@@ -36,6 +37,10 @@ app.get('/url', async (c) => {
     contentLengthRequired,
     responseTimeout: timeout,
     operationTimeout: timeout,
+  }), {
+    plugins: [
+      youtube,
+    ]
   })
   const summalyResponse = await summaly(parsedUrl, summalyOptions)
   return c.json(summalyResponse)
