@@ -27,8 +27,23 @@ async function getPlayer(response: OEmbedVideoResponse) {
     }
 }
 
+function isYouTubeVideoUrl(url: URL): boolean {
+    if (url.hostname === 'youtu.be') {
+        return /^\/[^/]+$/.test(url.pathname)
+    }
+
+    if (url.hostname !== 'www.youtube.com') {
+        return false
+    }
+
+    return (
+        (url.pathname === '/watch' && Boolean(url.searchParams.get('v'))) ||
+        /^\/(?:shorts|live)\/[^/]+$/.test(url.pathname)
+    )
+}
+
 export default {
-    test: (url: URL) => url.hostname === 'www.youtube.com' || url.hostname === 'youtu.be',
+    test: isYouTubeVideoUrl,
     async summarize(url) {
         console.log('Custom YouTube plugin is used')
         const oEmbedUrl = new URL('https://www.youtube.com/oembed')
