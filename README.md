@@ -1,3 +1,9 @@
+# MICROPEN Summary Proxy
+
+This is a summary proxy used in [MICROPEN](https://mi.kuropen.org/) Misskey server.
+
+-------------
+
 To install dependencies:
 ```sh
 bun install
