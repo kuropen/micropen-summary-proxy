@@ -1,3 +1,8 @@
+/*!
+ * MICROPEN summary proxy
+ * Copyright (C) 2026 Kuropen. Licensed under the Boost Software License 1.0 (BSL-1.0)
+ */
+
 /**
  * oEmbed API リクエストパラメータ
  * 消費者（Consumer）がプロバイダー（Provider）に送信するクエリパラメータの定義

@@ -1,3 +1,8 @@
+/*!
+ * MICROPEN summary proxy
+ * Copyright (C) 2026 Kuropen. Licensed under the Boost Software License 1.0 (BSL-1.0)
+ */
+
 import { SummalyPlugin } from "@misskey-dev/summaly";
 import { OEmbedVideoResponse } from "./oembed";
 import { HTMLRewriter } from "htmlrewriter";

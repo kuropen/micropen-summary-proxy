@@ -1,3 +1,8 @@
+/*!
+ * MICROPEN summary proxy
+ * Copyright (C) 2026 Kuropen. Licensed under the Boost Software License 1.0 (BSL-1.0)
+ */
+
 import { Hono } from 'hono'
 import { summaly, version } from '@misskey-dev/summaly'
 import * as z from 'zod'
