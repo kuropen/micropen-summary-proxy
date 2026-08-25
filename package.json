@@ -5,7 +5,7 @@
   },
   "dependencies": {
     "@misskey-dev/summaly": "^5.5.1",
-    "hono": "^4.13.2",
+    "hono": "^4.13.3",
     "htmlrewriter": "^0.0.13",
     "zod": "^4.4.3"
   },
