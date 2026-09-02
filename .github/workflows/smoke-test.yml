@@ -1,0 +1,127 @@
+name: Smoke test
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: Public YouTube video URL used for the plugin check
+        required: true
+        type: string
+        default: https://www.youtube.com/watch?v=jNQXAC9IVRw
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    name: Test PR code with Bun
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: http://127.0.0.1:3000
+      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Start application and run smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          server_log="${RUNNER_TEMP}/micropen-summary-proxy.log"
+          PORT=3000 bun run src/index.ts > "${server_log}" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            local status=$?
+            if (( status != 0 )); then
+              echo "::group::Application log"
+              cat "${server_log}"
+              echo "::endgroup::"
+            fi
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+            exit "${status}"
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --silent --fail --max-time 2 "${BASE_URL}/version" > /dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              echo "::error::Application exited before becoming ready"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "${ready}" != "true" ]]; then
+            echo "::error::Application did not become ready within 30 seconds"
+            exit 1
+          fi
+
+          echo "::group::Version endpoint"
+          version="$(curl --silent --show-error --fail-with-body --max-time 90 "${BASE_URL}/version")"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unexpected /version response: ${version}"
+            exit 1
+          fi
+          echo "Summaly version: ${version}"
+          echo "::endgroup::"
+
+          echo "::group::Normal web page"
+          normal_response="$(mktemp)"
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=https://example.com/"             --output "${normal_response}"             "${BASE_URL}/url"
+          jq -e '.title == "Example Domain"' "${normal_response}" > /dev/null
+          rm -f "${normal_response}"
+          echo "Example Domain was summarized successfully"
+          echo "::endgroup::"
+
+          echo "::group::Invalid input"
+          assert_rejected() {
+            local label="$1"
+            shift
+            local status
+            status="$(curl --silent --show-error --max-time 90               --output /dev/null --write-out '%{http_code}' "$@")"
+            if [[ "${status}" =~ ^2 ]]; then
+              echo "::error::${label} unexpectedly returned HTTP ${status}"
+              exit 1
+            fi
+            echo "${label}: HTTP ${status} (rejected as expected)"
+          }
+          assert_rejected "Missing url" "${BASE_URL}/url"
+          assert_rejected "Malformed url"             --get --data-urlencode "url=not-a-url"             "${BASE_URL}/url"
+          echo "::endgroup::"
+
+          echo "::group::YouTube video"
+          youtube_response="$(mktemp)"
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=${YOUTUBE_URL}"             --output "${youtube_response}"             "${BASE_URL}/url"
+          jq -e '
+            .sitename == "YouTube" and
+            ((.title | type) == "string" and (.title | length) > 0) and
+            ((.thumbnail | type) == "string" and (.thumbnail | length) > 0) and
+            ((.player.url | type) == "string" and
+              (.player.url | test("^https://www\\.youtube\\.com/embed/")))
+          ' "${youtube_response}" > /dev/null
+          rm -f "${youtube_response}"
+          echo "YouTube metadata and player were retrieved successfully"
+          echo "::endgroup::"
