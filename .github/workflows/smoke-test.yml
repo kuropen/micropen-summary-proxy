@@ -1,0 +1,106 @@
+name: Smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Base URL of the deployed application
+        required: true
+        type: string
+        default: https://micropen-summary-proxy-pr-8-hono-4-13-1.up.railway.app
+      youtube_url:
+        description: Public YouTube video URL used for the plugin check
+        required: true
+        type: string
+        default: https://www.youtube.com/watch?v=jNQXAC9IVRw
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-test-${{ inputs.base_url }}
+  cancel-in-progress: false
+
+jobs:
+  smoke-test:
+    name: Test deployed application
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: ${{ inputs.base_url }}
+      YOUTUBE_URL: ${{ inputs.youtube_url }}
+
+    steps:
+      - name: Normalize base URL
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="${BASE_URL%/}"
+          if [[ ! "${base_url}" =~ ^https?://[^[:space:]]+$ ]]; then
+            echo "::error::base_url must be an HTTP or HTTPS URL"
+            exit 1
+          fi
+          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check version endpoint
+        env:
+          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             "${TARGET_BASE_URL}/version")"
+          if [[ ! "${response}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unexpected /version response: ${response}"
+            exit 1
+          fi
+          echo "Summaly version: ${response}"
+
+      - name: Summarize a normal web page
+        env:
+          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=https://example.com/"             --output "${response_file}"             "${TARGET_BASE_URL}/url"
+          jq -e '.title == "Example Domain"' "${response_file}" > /dev/null
+
+      - name: Reject missing and malformed URLs
+        env:
+          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          assert_rejected() {
+            local label="$1"
+            shift
+            local status
+            status="$(curl --silent --show-error               --retry 2 --retry-all-errors --max-time 90               --output /dev/null --write-out '%{http_code}' "$@")"
+            if [[ "${status}" =~ ^2 ]]; then
+              echo "::error::${label} unexpectedly returned HTTP ${status}"
+              exit 1
+            fi
+            echo "${label}: HTTP ${status} (rejected as expected)"
+          }
+
+          assert_rejected "Missing url" "${TARGET_BASE_URL}/url"
+          assert_rejected "Malformed url"             --get --data-urlencode "url=not-a-url"             "${TARGET_BASE_URL}/url"
+
+      - name: Summarize a YouTube video
+        env:
+          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=${YOUTUBE_URL}"             --output "${response_file}"             "${TARGET_BASE_URL}/url"
+          jq -e '
+            .sitename == "YouTube" and
+            (.title | type == "string" and length > 0) and
+            (.thumbnail | type == "string" and length > 0) and
+            (.player.url | type == "string" and test("^https://www\\.youtube\\.com/embed/"))
+          ' "${response_file}" > /dev/null
