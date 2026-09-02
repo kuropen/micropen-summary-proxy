@@ -1,13 +1,11 @@
 name: Smoke test
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
-      base_url:
-        description: Base URL of the deployed application
-        required: true
-        type: string
-        default: https://micropen-summary-proxy-pr-8-hono-4-13-1.up.railway.app
       youtube_url:
         description: Public YouTube video URL used for the plugin check
         required: true
@@ -18,89 +16,112 @@ permissions:
   contents: read
 
 concurrency:
-  group: smoke-test-${{ inputs.base_url }}
-  cancel-in-progress: false
+  group: smoke-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke-test:
-    name: Test deployed application
+    name: Test PR code with Bun
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      BASE_URL: ${{ inputs.base_url }}
-      YOUTUBE_URL: ${{ inputs.youtube_url }}
+      BASE_URL: http://127.0.0.1:3000
+      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
 
     steps:
-      - name: Normalize base URL
-        id: target
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Start application and run smoke tests
         shell: bash
         run: |
           set -euo pipefail
-          base_url="${BASE_URL%/}"
-          if [[ ! "${base_url}" =~ ^https?://[^[:space:]]+$ ]]; then
-            echo "::error::base_url must be an HTTP or HTTPS URL"
+
+          server_log="${RUNNER_TEMP}/micropen-summary-proxy.log"
+          PORT=3000 bun run src/index.ts > "${server_log}" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            local status=$?
+            if (( status != 0 )); then
+              echo "::group::Application log"
+              cat "${server_log}"
+              echo "::endgroup::"
+            fi
+            kill "${server_pid}" 2>/dev/null || true
+            wait "${server_pid}" 2>/dev/null || true
+            exit "${status}"
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --silent --fail --max-time 2 "${BASE_URL}/version" > /dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              echo "::error::Application exited before becoming ready"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "${ready}" != "true" ]]; then
+            echo "::error::Application did not become ready within 30 seconds"
             exit 1
           fi
-          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
 
-      - name: Check version endpoint
-        env:
-          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          response="$(curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             "${TARGET_BASE_URL}/version")"
-          if [[ ! "${response}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Unexpected /version response: ${response}"
+          echo "::group::Version endpoint"
+          version="$(curl --silent --show-error --fail-with-body --max-time 90 "${BASE_URL}/version")"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unexpected /version response: ${version}"
             exit 1
           fi
-          echo "Summaly version: ${response}"
+          echo "Summaly version: ${version}"
+          echo "::endgroup::"
 
-      - name: Summarize a normal web page
-        env:
-          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          response_file="$(mktemp)"
-          trap 'rm -f "${response_file}"' EXIT
-          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=https://example.com/"             --output "${response_file}"             "${TARGET_BASE_URL}/url"
-          jq -e '.title == "Example Domain"' "${response_file}" > /dev/null
+          echo "::group::Normal web page"
+          normal_response="$(mktemp)"
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=https://example.com/"             --output "${normal_response}"             "${BASE_URL}/url"
+          jq -e '.title == "Example Domain"' "${normal_response}" > /dev/null
+          rm -f "${normal_response}"
+          echo "Example Domain was summarized successfully"
+          echo "::endgroup::"
 
-      - name: Reject missing and malformed URLs
-        env:
-          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
+          echo "::group::Invalid input"
           assert_rejected() {
             local label="$1"
             shift
             local status
-            status="$(curl --silent --show-error               --retry 2 --retry-all-errors --max-time 90               --output /dev/null --write-out '%{http_code}' "$@")"
+            status="$(curl --silent --show-error --max-time 90               --output /dev/null --write-out '%{http_code}' "$@")"
             if [[ "${status}" =~ ^2 ]]; then
               echo "::error::${label} unexpectedly returned HTTP ${status}"
               exit 1
             fi
             echo "${label}: HTTP ${status} (rejected as expected)"
           }
+          assert_rejected "Missing url" "${BASE_URL}/url"
+          assert_rejected "Malformed url"             --get --data-urlencode "url=not-a-url"             "${BASE_URL}/url"
+          echo "::endgroup::"
 
-          assert_rejected "Missing url" "${TARGET_BASE_URL}/url"
-          assert_rejected "Malformed url"             --get --data-urlencode "url=not-a-url"             "${TARGET_BASE_URL}/url"
-
-      - name: Summarize a YouTube video
-        env:
-          TARGET_BASE_URL: ${{ steps.target.outputs.base_url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          response_file="$(mktemp)"
-          trap 'rm -f "${response_file}"' EXIT
-          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=${YOUTUBE_URL}"             --output "${response_file}"             "${TARGET_BASE_URL}/url"
+          echo "::group::YouTube video"
+          youtube_response="$(mktemp)"
+          curl --silent --show-error --fail-with-body             --retry 2 --retry-all-errors --max-time 90             --get --data-urlencode "url=${YOUTUBE_URL}"             --output "${youtube_response}"             "${BASE_URL}/url"
           jq -e '
             .sitename == "YouTube" and
-            (.title | type == "string" and length > 0) and
-            (.thumbnail | type == "string" and length > 0) and
-            (.player.url | type == "string" and test("^https://www\\.youtube\\.com/embed/"))
-          ' "${response_file}" > /dev/null
+            ((.title | type) == "string" and (.title | length) > 0) and
+            ((.thumbnail | type) == "string" and (.thumbnail | length) > 0) and
+            ((.player.url | type) == "string" and
+              (.player.url | test("^https://www\\.youtube\\.com/embed/")))
+          ' "${youtube_response}" > /dev/null
+          rm -f "${youtube_response}"
+          echo "YouTube metadata and player were retrieved successfully"
+          echo "::endgroup::"
