@@ -7,7 +7,7 @@
     "@misskey-dev/summaly": "^5.5.2",
     "hono": "^4.13.13",
     "htmlrewriter": "^0.0.13",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bun": "latest"
