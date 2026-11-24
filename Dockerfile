@@ -1,6 +1,6 @@
 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 AS aws-lambda-adapter
 
-FROM oven/bun:1.4.4-debian
+FROM oven/bun:1.4.5-debian
 
 COPY --from=aws-lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 
